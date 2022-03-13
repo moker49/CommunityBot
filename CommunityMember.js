@@ -38,6 +38,10 @@ module.exports = class CommunityMember {
 		this.stats.set("XP Rate", xp_rate);
 	}
 
+	earnPassiveXp(xp_mult, XP_CURVE, XP_SHIFT) {
+		this.giveXp(xp_mult * CommunityMember.PASSIVE_XP_GAIN, XP_CURVE, XP_SHIFT);
+	}
+
 	earnXp(xp_mult, xp, xp_curve, xp_shift) {
 		for (let arg of arguments) {
 			if (!arg) {
@@ -49,6 +53,10 @@ module.exports = class CommunityMember {
 		let actual_gain = xp_mult * Math.min(possible_gain, current_limit);
 		this.xp_gain_limit -= actual_gain;
 		return this.giveXp(xp_mult * actual_gain, xp_curve, xp_shift);
+	}
+
+	giveGold(gold) {
+		this.currencies.gold += gold;
 	}
 
 	giveXp(xp, xp_curve, xp_shift) {
@@ -64,8 +72,9 @@ module.exports = class CommunityMember {
 		return this.level;
 	}
 
-	giveGold(gold) {
-		this.currencies.gold += gold;
+	levelUp(xp_curve, xp_shift) {
+		this.level += 1;
+		this.xp_threshold += this.level * xp_curve + xp_shift;
 	}
 
 	recalculateLevel(xp_curve, xp_shift) {
@@ -74,15 +83,6 @@ module.exports = class CommunityMember {
 		while (this.xp >= this.xp_threshold) {
 			this.levelUp(xp_curve, xp_shift);
 		}
-	}
-
-	levelUp(xp_curve, xp_shift) {
-		this.level += 1;
-		this.xp_threshold += this.level * xp_curve + xp_shift;
-	}
-
-	earnPassiveXp(xp_mult, XP_CURVE, XP_SHIFT) {
-		this.giveXp(xp_mult * CommunityMember.PASSIVE_XP_GAIN, XP_CURVE, XP_SHIFT);
 	}
 
 	resetXpLimit() {

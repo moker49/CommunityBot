@@ -2,41 +2,48 @@
 const update_roles = true;
 const tick = true;
 const write_to_disk = true;
-const update_teamcount_from_chat = true;
-//-----------DEBUG VARIABLES //-----------
+const update_teamcount_from_chat = false;
+let team_count = 2350;
+//-----------               //-----------
 
 const { Console, groupCollapsed } = require("console");
+const CommunityMember = require("./CommunityMember");
 const Discord = require("discord.js");
 const fs = require("fs");
-const config = require("./config.json");
-
-const CommunityMember = require("./CommunityMember");
 const Shop = require("./shop");
-
+const config = require("./config.json");
 const CLIENT = new Discord.Client();
 const GUILD_ID = "90057012959780864"; // niggapuff serverId
-let guild;
 
 const BOT_ID = "763501654581837835";
 const AFK_CHANNEL_ID = "805678356880031774";
-
 const BOT_CHANNEL_ID = "763530028142166028"; //bots: 763530028142166028
 const COMMUNITY_CHANNEL_ID = "805284193289502720";
+
 let bot_channel;
 let community_channel;
+let community_members = [];
+let game_clock;
+let guild;
+let info_clock;
+let on_voice = new Set();
 
-//don't do earnXp from these channels:
+//-----------No EarnXP Here //-----------
 const TEAM_COUNTING_CHANNEL_ID = "806603751694663732";
 const LOTTERY_CHANNEL_ID = "813978313487679528";
 const SHOP_CHANNEL_ID = "814165440355762236";
 let team_counting_channel;
 let lottery_channel;
 let shop_channel;
+//-----------               //-----------
 
-const COLOR_PINK = 0xe85098;
+//-----------Colors          /-----------
+const COLOR_THEME = 0x501994;
 const COLOR_POSITIVE = 0x20c002;
 const COLOR_NEGATIVE = 0xc02020;
+//-----------               //-----------
 
+//-----------Game Rates     //-----------
 let xp_mult = 1;
 const XP_SHIFT = 40;
 const XP_CURVE = 60;
@@ -50,22 +57,21 @@ const CHAR_XP = 5;
 const LINK_XP = 50;
 const SOFT_LEVEL_CAP = 150;
 
-let team_count = 2173;
 const count_gold_gain = 1;
 const count_base_xp = 20;
 const mod100_xp = 100;
 const mod1000_xp = 1000;
 
-let game_clock;
-let info_clock;
 const GAME_TICK_COOLDOWN = 60000;
 const UPDATE_INFO_COOLDOWN = 360000;
+//-----------              //-----------
 
+//-----------Visuals       //-----------
 const DEFAULT_LEADERBOARD_SIZE = 10;
 const PROGRESS_BAR_CHUNKS = 19;
 const PROGRESS_BAR_EMPTY = "▱";
 const PROGRESS_BAR_FULL = "▰";
-const COMMUNITY_ICON = "https://i.imgur.com/xk1UydC.png";
+//const COMMUNITY_ICON = "https://i.imgur.com/xk1UydC.png";
 const CURRENCY_ICON = "https://i.imgur.com/j3JjzTc.png";
 const LEVEL_BADGES = [
 	"https://i.imgur.com/5GDjRSC.png",
@@ -100,12 +106,11 @@ const LEVEL_BADGES = [
 	"https://i.imgur.com/0aBx5y6.png",
 	"https://i.imgur.com/awxjy2b.png",
 ];
+//-----------              //-----------
 
-let community_members = [];
-let on_voice = new Set();
-console.log("Bot not ready");
-
+console.log("Bot starting...");
 loadCommunityMembersFromDisk();
+recalculateLevels();
 
 CLIENT.on("ready", async () => {
 	createNewMembers();
@@ -120,7 +125,6 @@ CLIENT.on("ready", async () => {
 
 	updateVoiceList();
 	console.log("Bot ready");
-	doSomethingOnce();
 });
 
 CLIENT.on("message", async (input_msg) => {
@@ -258,31 +262,49 @@ CLIENT.on("guildMemberAdd", (member) => {
 	createNewMembers();
 });
 
-function isCommand(input_msg) {
-	return input_msg.content.indexOf(config.prefix) === 0;
+async function alertCount(input_msg, xp) {
+	const embed = new Discord.MessageEmbed()
+		.setTitle(`${input_msg}!`)
+		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
+		.setColor(COLOR_THEME)
+		.setFooter(`+${xp} bonus xp!`);
+	await team_counting_channel.send(embed);
 }
 
-function teamCount(input_msg) {
-	let atempt = +input_msg.content;
-	let next = team_count + 1;
-	if (!atempt) {
-		input_msg.delete();
-		return;
+function argsExist(args, expected_args, err_msg) {
+	for (let i = 0; i < expected_args; i++) {
+		if (!args[i]) throw err_msg;
 	}
-	if (atempt == next) {
-		team_count = next;
-		let xp = countXp(next, input_msg);
-		giveXp(input_msg.author.id, xp_mult * xp, false);
-		giveGold(input_msg.author, count_gold_gain);
-	} else if (next > attempt > next - 10) {
-		//team_count = next;
-		let xp = count_base_xp;
-		giveXp(input_msg.author.id, xp_mult * xp);
-		giveGold(input_msg.author, count_gold_gain);
-		input_msg.delete();
-	} else {
-		input_msg.delete();
+}
+
+function calculateXP(input) {
+	let link_xp = input.substring(0, input.indexOf("http")).length + LINK_XP;
+	return input.includes("http") ? link_xp : input.length * CHAR_XP;
+}
+
+function checkChannelExists(channel) {
+	if (!channel) {
+		throw "Channel not found.";
 	}
+}
+
+function checkPermissions(user, permissions) {
+	permissions.forEach((permission) => {
+		if (!user.permissions.has(permission)) {
+			throw `You need the following permission for this command: ${permission}`;
+		}
+	});
+}
+
+function cleanString(input) {
+	output = input;
+	output = output.replace(/"/g, '"');
+	output = output.replace(/\n/g, "");
+	return output;
+}
+
+function couldntWriteToDisk(reason) {
+	console.log("Couldn't write membersto disk. reason:" + reason);
 }
 
 function countXp(count, input_msg) {
@@ -297,116 +319,38 @@ function countXp(count, input_msg) {
 	return xp;
 }
 
-async function alertCount(input_msg, xp) {
-	const embed = new Discord.MessageEmbed()
-		.setTitle(`${input_msg}!`)
-		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
-		.setColor(COLOR_PINK)
-		.setFooter(`+${xp} bonus xp!`);
-	await team_counting_channel.send(embed);
+function createNewMembers() {
+	// Create new Members out of new Users
+	CLIENT.users.cache.forEach(({ id, username }) => {
+		if (!getMember(id)) {
+			console.log(`New user detected: ${username}`);
+			community_members.push(new CommunityMember({ id: id, name: username }, DEFAULT_XP_THRESHOLD));
+			console.log(`New user added: ${username}`);
+		}
+	});
 }
 
-function giveGold(memberId, gold) {
+function earnXp(memberId, xp) {
 	let member = getMember(memberId);
-	member.giveGold(gold);
+	let recipient_level = member.earnXp(xp_mult, xp, XP_CURVE, XP_SHIFT);
+	updateRole(memberId);
 }
 
-function updateVoiceList() {
-	let voice;
-	guild.members.cache.forEach((member) => {
-		voice = member.voice;
-		if (voice && voice.channelID && voice.channelID != AFK_CHANNEL_ID) {
-			on_voice.add(member.id);
-		}
+function gameTick() {
+	CLIENT.users.cache.forEach(({ id, presence: { status } }) => {
+		regenerate(getMember(id), status);
+		updateRole(id);
 	});
+	handoutVoiceXp();
+	writeCommunityMembersToDisk();
 }
 
-function checkPermissions(user, permissions) {
-	permissions.forEach((permission) => {
-		if (!user.permissions.has(permission)) {
-			throw `You need the following permission for this command: ${permission}`;
-		}
-	});
-}
-
-function argsExist(args, expected_args, err_msg) {
-	for (let i = 0; i < expected_args; i++) {
-		if (!args[i]) throw err_msg;
+function getMember(id) {
+	try {
+		return community_members.filter((element) => element.id == id)[0];
+	} catch (err) {
+		return false;
 	}
-}
-
-function memberExists(userId) {
-	if (!getMember(userId)) {
-		throw "Community member not found.";
-	}
-}
-
-function checkChannelExists(channel) {
-	if (!channel) {
-		throw "Channel not found.";
-	}
-}
-
-function updateRole(id) {
-	if (update_roles) {
-		let role_recipient = guild.members.cache.get(id);
-		let level = getMember(id).level;
-		let level_base = Math.trunc(Math.min(SOFT_LEVEL_CAP, level) / 10);
-		let new_role_name = `LVL${level_base}0+`;
-		let old_role_name = `LVL${level_base - 1}0+`;
-
-		try {
-			let old_role = guild.roles.cache.find((role) => role.name == old_role_name);
-			role_recipient.roles.remove(old_role.id);
-		} catch (err) {}
-		try {
-			let new_role = guild.roles.cache.find((role) => role.name == new_role_name);
-			role_recipient.roles.add(new_role.id);
-		} catch (err) {}
-	}
-}
-
-async function sendEmbedLevel(input_msg, destinationChannel = community_channel) {
-	let { level, xp, xp_threshold } = getMember(input_msg.author.id);
-	let badge_level = Math.min(level, SOFT_LEVEL_CAP);
-	const embed = new Discord.MessageEmbed()
-		.setTitle(`Level ${level}`)
-		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
-		.setColor(COLOR_PINK)
-		.setDescription(getProgressBar(level, xp, xp_threshold))
-		.setThumbnail(LEVEL_BADGES[Math.trunc(badge_level / 5)])
-		.setFooter(xp + "/" + xp_threshold);
-	await destinationChannel.send(embed);
-}
-
-async function sendEmbedStats(input_msg, destinationChannel = community_channel) {
-	let { stats } = getMember(input_msg.author.id);
-	const embed = new Discord.MessageEmbed()
-		//.setTitle(`Stats`)
-		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
-		.setColor(COLOR_PINK);
-	for ([stat_name, value] of stats.entries()) {
-		embed.addField(stat_name, value, true);
-	}
-	await destinationChannel.send(embed);
-}
-
-async function sendEmbedInventory(input_msg, destinationChannel = community_channel) {
-	let currencies_string = () => {
-		let output = "";
-		for ([key, value] of Object.entries(getMember(input_msg.author.id).currencies)) {
-			output += `${key}: ${value}   `;
-		}
-		return output;
-	};
-	const embed = new Discord.MessageEmbed()
-		.setTitle("Inventory")
-		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
-		.setColor(COLOR_PINK)
-		//.setDescription()
-		//.setThumbnail(LEVEL_BADGES[Math.trunc(level / 5)])
-		.setFooter(currencies_string(), CURRENCY_ICON);
-	await destinationChannel.send(embed);
 }
 
 function getProgressBar(level, xp, xp_threshold) {
@@ -427,6 +371,94 @@ function getProgressBar(level, xp, xp_threshold) {
 		progress_bar += PROGRESS_BAR_EMPTY;
 	}
 	return progress_bar;
+}
+
+function giveGold(memberId, gold) {
+	let member = getMember(memberId);
+	member.giveGold(gold);
+}
+
+function giveXp(memberId, xp) {
+	let member = getMember(memberId);
+	let recipient_level = member.giveXp(xp, XP_CURVE, XP_SHIFT);
+	updateRole(memberId);
+}
+
+function handoutVoiceXp() {
+	let getVoiceXp = () => {
+		if (on_voice.size < VOICE_XP_MIN_MEMBERS) {
+			return false;
+		} else if (on_voice.size <= VOICE_XP_MAX_MEMBERS) {
+			return VOICE_XP_MULT * on_voice.size + VOICE_XP_BASE;
+		} else {
+			return VOICE_XP_PAST_MAX;
+		}
+	};
+	let voice_xp = getVoiceXp();
+	if (voice_xp) {
+		for (let memberId of on_voice) {
+			giveXp(memberId, xp_mult * voice_xp);
+		}
+	}
+}
+
+function isCommand(input_msg) {
+	return input_msg.content.indexOf(config.prefix) === 0;
+}
+
+function loadCommunityMembersFromDisk() {
+	// Load members from file as array
+	let data = fs.readFileSync("community_members.json", "utf-8");
+	let temp_array = JSON.parse(data);
+
+	// Convert each 'object' in temp_array into 'CommunityMember', push that into community_members
+	temp_array.forEach((member) => {
+		// community_members.set(raw_member[0], new CommunityMember(raw_member[1], DEFAULT_XP_THRESHOLD));
+		community_members.push(new CommunityMember(member, DEFAULT_XP_THRESHOLD));
+	});
+}
+
+function memberExists(userId) {
+	if (!getMember(userId)) {
+		throw "Community member not found.";
+	}
+}
+
+function moveMessage(fromChannel, toChannel, messageID) {
+	fromChannel.messages
+		.fetch(messageID)
+		.then(async (message) => {
+			var wbs = await toChannel.fetchWebhooks();
+			if (wbs.size < 1) var wb = await toChannel.createWebhook("Move Message");
+			else var wb = wbs.first();
+			wb.send(message.content || "", {
+				username: message.author.tag,
+				avatarURL: message.author.avatarURL(),
+				embeds: message.embeds,
+				files: message.attachments.array(),
+			}).then(() => {
+				message.delete();
+			});
+		})
+		.catch((e) => {
+			console.log(e);
+			throw "Error moving";
+		});
+}
+
+function recalculateLevels() {
+	console.log("Recalculating levels");
+	for (member of community_members) {
+		member.recalculateLevel(XP_CURVE, XP_SHIFT);
+	}
+	console.log("Recalculating done");
+}
+
+function regenerate(member, status) {
+	if (member.id != BOT_ID && status != "offline") {
+		member.earnPassiveXp(xp_mult, XP_CURVE, XP_SHIFT);
+		member.resetXpLimit();
+	}
 }
 
 async function sendEmbedLeaderboard(destination_channel, leaderboard_size) {
@@ -456,43 +488,149 @@ async function sendEmbedLeaderboard(destination_channel, leaderboard_size) {
 
 	embed = new Discord.MessageEmbed()
 		.setTitle("Leaderboard")
-		.setColor(COLOR_PINK)
+		.setColor(COLOR_THEME)
 		.setDescription(description())
-		.setThumbnail(COMMUNITY_ICON)
+		//.setThumbnail(COMMUNITY_ICON)
 		.setTimestamp();
 	await destination_channel.send({ embed });
 }
 
+async function sendEmbedLevel(input_msg, destinationChannel = community_channel) {
+	let { level, xp, xp_threshold } = getMember(input_msg.author.id);
+	let badge_level = Math.min(level, SOFT_LEVEL_CAP);
+	const embed = new Discord.MessageEmbed()
+		.setTitle(`Level ${level}`)
+		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
+		.setColor(COLOR_THEME)
+		.setDescription(getProgressBar(level, xp, xp_threshold))
+		.setThumbnail(LEVEL_BADGES[Math.trunc(badge_level / 5)])
+		.setFooter(xp + "/" + xp_threshold);
+	await destinationChannel.send(embed);
+}
+
+async function sendEmbedInventory(input_msg, destinationChannel = community_channel) {
+	let currencies_string = () => {
+		let output = "";
+		for ([key, value] of Object.entries(getMember(input_msg.author.id).currencies)) {
+			output += `${key}: ${value}   `;
+		}
+		return output;
+	};
+	const embed = new Discord.MessageEmbed()
+		.setTitle("Inventory")
+		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
+		.setColor(COLOR_THEME)
+		//.setDescription()
+		//.setThumbnail(LEVEL_BADGES[Math.trunc(level / 5)])
+		.setFooter(currencies_string(), CURRENCY_ICON);
+	await destinationChannel.send(embed);
+}
+
 function sendEmbedShop() {
-	let embed = new Discord.MessageEmbed().setTitle("Shop").setColor(COLOR_PINK).setFooter("Try !inspect #");
+	let embed = new Discord.MessageEmbed().setTitle("Shop").setColor(COLOR_THEME).setFooter("Try !inspect #");
 	shop_channel.send("** **\n**┍ - - - - Shop - - - - ┑**\n`!inspect` `!buy` `!sell`");
 	for (item of Shop.items) {
-		embed = new Discord.MessageEmbed().setTitle(`${item.name}`).setColor(COLOR_PINK);
+		embed = new Discord.MessageEmbed().setTitle(`${item.name}`).setColor(COLOR_THEME);
 		embed.addField(`${item.description}`, `₡${item.cost}`, true);
 		shop_channel.send(embed);
 	}
 	shop_channel.send("`!inspect` `!buy` `!sell`\n**┕ - - - - Shop - - - - ┙**\n** **");
 }
 
-function loadCommunityMembersFromDisk() {
-	// Load members from file as array
-	let data = fs.readFileSync("community_members.json", "utf-8");
-	let temp_array = JSON.parse(data);
+async function sendEmbedStats(input_msg, destinationChannel = community_channel) {
+	let { stats } = getMember(input_msg.author.id);
+	const embed = new Discord.MessageEmbed()
+		//.setTitle(`Stats`)
+		.setAuthor(input_msg.member.displayName, input_msg.author.avatarURL())
+		.setColor(COLOR_THEME);
+	for ([stat_name, value] of stats.entries()) {
+		embed.addField(stat_name, value, true);
+	}
+	await destinationChannel.send(embed);
+}
 
-	// Convert each 'object' in temp_array into 'CommunityMember', push that into community_members
-	temp_array.forEach((member) => {
-		// community_members.set(raw_member[0], new CommunityMember(raw_member[1], DEFAULT_XP_THRESHOLD));
-		community_members.push(new CommunityMember(member, DEFAULT_XP_THRESHOLD));
+async function setCount() {
+	let team_counting_channel = CLIENT.channels.cache.get(TEAM_COUNTING_CHANNEL_ID);
+	let raw_messages = await team_counting_channel.messages.fetch({ limit: 10 });
+	let messages = Array.from(raw_messages);
+
+	let last_message;
+	do {
+		last_message = messages?.shift()[1];
+	} while (isNaN(last_message) || last_message?.author.bot);
+	if (update_teamcount_from_chat) {
+		team_count = +last_message.content ?? team_count;
+	}
+	console.log(`Team Count set at ${team_count}`);
+}
+
+function setGuildAndChannels() {
+	guild = CLIENT.guilds.cache.get(GUILD_ID);
+	bot_channel = CLIENT.channels.cache.get(BOT_CHANNEL_ID);
+	community_channel = CLIENT.channels.cache.get(COMMUNITY_CHANNEL_ID);
+	team_counting_channel = CLIENT.channels.cache.get(TEAM_COUNTING_CHANNEL_ID);
+	lottery_channel = CLIENT.channels.cache.get(LOTTERY_CHANNEL_ID);
+	shop_channel = CLIENT.channels.cache.get(SHOP_CHANNEL_ID);
+}
+
+function sortByXp(input) {
+	return Array.from(input).sort((member_a, member_b) => {
+		return member_a.xp < member_b.xp ? 1 : -1;
 	});
 }
 
-function createNewMembers() {
-	// Create new Members out of new Users
-	CLIENT.users.cache.forEach(({ id, username }) => {
-		if (!getMember(id)) {
-			console.log(`New user detected: ${username}`);
-			community_members.push(new CommunityMember({ id: id, name: username }, DEFAULT_XP_THRESHOLD));
-			console.log(`New user added: ${username}`);
+function teamCount(input_msg) {
+	let atempt = +input_msg.content;
+	let next = team_count + 1;
+	if (!atempt) {
+		input_msg.delete();
+		return;
+	}
+	if (atempt == next) {
+		team_count = next;
+		let xp = countXp(next, input_msg);
+		giveXp(input_msg.author.id, xp_mult * xp, false);
+		giveGold(input_msg.author, count_gold_gain);
+	} else if (next > attempt > next - 10) {
+		//team_count = next;
+		let xp = count_base_xp;
+		giveXp(input_msg.author.id, xp_mult * xp);
+		giveGold(input_msg.author, count_gold_gain);
+		input_msg.delete();
+	} else {
+		input_msg.delete();
+	}
+}
+
+function updateRole(id) {
+	if (update_roles) {
+		let role_recipient = guild.members.cache.get(id);
+		let level = getMember(id).level;
+		let level_base = Math.trunc(Math.min(SOFT_LEVEL_CAP, level) / 10);
+		let new_role_name = `LVL${level_base}0+`;
+		let old_role_name = `LVL${level_base - 1}0+`;
+
+		try {
+			let old_role = guild.roles.cache.find((role) => role.name == old_role_name);
+			role_recipient.roles.remove(old_role.id);
+		} catch (err) {}
+		try {
+			let new_role = guild.roles.cache.find((role) => role.name == new_role_name);
+			role_recipient.roles.add(new_role.id);
+		} catch (err) {}
+	}
+}
+
+function updateInfo() {
+	team_counting_channel.setName(`counting - ${team_count}﹢`);
+}
+
+function updateVoiceList() {
+	let voice;
+	guild.members.cache.forEach((member) => {
+		voice = member.voice;
+		if (voice && voice.channelID && voice.channelID != AFK_CHANNEL_ID) {
+			on_voice.add(member.id);
 		}
 	});
 }
@@ -519,216 +657,6 @@ function writeCommunityMembersToDisk() {
 		}
 	});
 }
-function couldntWriteToDisk(reason) {
-	console.log("Couldn't write membersto disk. reason:" + reason);
-}
-
-function calculateXP(input) {
-	let link_xp = input.substring(0, input.indexOf("http")).length + LINK_XP;
-	return input.includes("http") ? link_xp : input.length * CHAR_XP;
-}
-
-function regenerate(member, status) {
-	if (member.id != BOT_ID && status != "offline") {
-		member.earnPassiveXp(xp_mult, XP_CURVE, XP_SHIFT);
-		member.resetXpLimit();
-	}
-}
-
-function gameTick() {
-	CLIENT.users.cache.forEach(({ id, presence: { status } }) => {
-		regenerate(getMember(id), status);
-		updateRole(id);
-	});
-	handoutVoiceXp();
-	writeCommunityMembersToDisk();
-}
-
-function updateInfo() {
-	team_counting_channel.setName(`counting - ${team_count}﹢`);
-}
-
-function handoutVoiceXp() {
-	let getVoiceXp = () => {
-		if (on_voice.size < VOICE_XP_MIN_MEMBERS) {
-			return false;
-		} else if (on_voice.size <= VOICE_XP_MAX_MEMBERS) {
-			return VOICE_XP_MULT * on_voice.size + VOICE_XP_BASE;
-		} else {
-			return VOICE_XP_PAST_MAX;
-		}
-	};
-	let voice_xp = getVoiceXp();
-	if (voice_xp) {
-		for (let memberId of on_voice) {
-			giveXp(memberId, xp_mult * voice_xp);
-		}
-	}
-}
-
-function sortByXp(input) {
-	return Array.from(input).sort((member_a, member_b) => {
-		return member_a.xp < member_b.xp ? 1 : -1;
-	});
-}
-
-function getMember(id) {
-	try {
-		return community_members.filter((element) => element.id == id)[0];
-	} catch (err) {
-		return false;
-	}
-}
-
-function setGuildAndChannels() {
-	guild = CLIENT.guilds.cache.get(GUILD_ID);
-	bot_channel = CLIENT.channels.cache.get(BOT_CHANNEL_ID);
-	community_channel = CLIENT.channels.cache.get(COMMUNITY_CHANNEL_ID);
-	team_counting_channel = CLIENT.channels.cache.get(TEAM_COUNTING_CHANNEL_ID);
-	lottery_channel = CLIENT.channels.cache.get(LOTTERY_CHANNEL_ID);
-	shop_channel = CLIENT.channels.cache.get(SHOP_CHANNEL_ID);
-}
-
-async function setCount() {
-	let team_counting_channel = CLIENT.channels.cache.get(TEAM_COUNTING_CHANNEL_ID);
-	let raw_messages = await team_counting_channel.messages.fetch({ limit: 2 });
-	let messages = Array.from(raw_messages);
-
-	let last_message;
-	do {
-		last_message = messages?.shift()[1];
-	} while (last_message?.author.bot);
-	if (update_teamcount_from_chat) {
-		team_count = +last_message.content ?? team_count;
-	}
-	console.log(`Team Count set at ${team_count}`);
-}
-
-// async function retroactiveXp(date) {
-// 	guild = CLIENT.guilds.cache.get(GUILD_ID);
-// 	// get all relevant messages
-// 	console.log("Starting RetroactiveXp");
-// 	let all_messages = [];
-// 	for (let [id, channel] of guild.channels.cache) {
-// 		if (channel.type == "text" && channel.id != TEAM_COUNTING_CHANNEL_ID) {
-// 			console.log(` ┕ Fetching msgs from channel ${channel.name}`);
-// 			let last_id;
-// 			outer: do {
-// 				let options = { limit: 50 };
-// 				if (last_id) {
-// 					options.before = last_id;
-// 				}
-// 				let wrapped_msgs = await channel.messages.fetch(options);
-// 				let clean_msgs = Array.from(wrapped_msgs);
-
-// 				let current_message;
-// 				for (let i = 0; i < clean_msgs.length - 1; i++) {
-// 					current_message = clean_msgs[i][1];
-// 					if (current_message.createdAt.getTime() < date) {
-// 						break outer;
-// 					} else {
-// 						all_messages.push(current_message);
-// 					}
-// 				}
-
-// 				last_id = current_message ? current_message.id : null;
-// 			} while (last_id);
-// 		}
-// 	}
-// 	// organize all relevant messages
-// 	console.log("Organizing mesages");
-// 	let organized_msgs = [];
-// 	let id, xp, time;
-// 	for (let message of all_messages) {
-// 		id = message.author.id;
-// 		xp = calculateXP(message.content);
-// 		time = message.createdAt.getTime();
-// 		let idMatch = organized_msgs.filter((element) => element.id == id)[0] ?? false;
-// 		if (!idMatch) {
-// 			organized_msgs.push({ id: id, messages: [{ xp: xp, time: time }] });
-// 		} else {
-// 			idMatch.messages.push({ xp: xp, time: time });
-// 		}
-// 	}
-// 	// track xp of each user, keep it under the xp-limit/minute
-// 	console.log("Tracking xp per message per user");
-// 	let xp_limit_tracker = [];
-// 	for (let entry of organized_msgs) {
-// 		let current_member = {
-// 			id: entry.id,
-// 			xp: 0,
-// 			xp_gain_limit: XP_GAIN_LIMIT,
-// 			limit_reset: date + REPEATING_ACTIONS_COOLDOWN,
-// 		};
-// 		xp_limit_tracker.push(current_member);
-// 		for (let message of entry.messages) {
-// 			if (message.time >= current_member.limit_reset) {
-// 				current_member.xp_gain_limit = XP_GAIN_LIMIT;
-// 				current_member.limit_reset += REPEATING_ACTIONS_COOLDOWN;
-// 			}
-// 			let xp_gain = Math.min(message.xp, current_member.xp_gain_limit);
-// 			current_member.xp += xp_gain;
-// 			current_member.xp_gain_limit -= xp_gain;
-// 		}
-// 	}
-// 	console.log("Handing out Xp");
-// 	//give retroactive xp
-// 	for (let { id, xp } of xp_limit_tracker) {
-// 		giveXp(id, xp);
-// 	}
-// 	console.log("RetroacticeXp done");
-// }
-
-function giveXp(memberId, xp) {
-	let member = getMember(memberId);
-	let recipient_level = member.giveXp(xp, XP_CURVE, XP_SHIFT);
-	updateRole(memberId);
-}
-
-function earnXp(memberId, xp) {
-	let member = getMember(memberId);
-	let recipient_level = member.earnXp(xp_mult, xp, XP_CURVE, XP_SHIFT);
-	updateRole(memberId);
-}
-
-function recalculateLevels() {
-	console.log("Recalculating levels");
-	for (member of community_members) {
-		member.recalculateLevel(XP_CURVE, XP_SHIFT);
-	}
-	console.log("Recalculating done");
-}
-
-function cleanString(input) {
-	output = input;
-	output = output.replace(/"/g, '"');
-	output = output.replace(/\n/g, "");
-	return output;
-}
-
-function moveMessage(fromChannel, toChannel, messageID) {
-	fromChannel.messages
-		.fetch(messageID)
-		.then(async (message) => {
-			var wbs = await toChannel.fetchWebhooks();
-			if (wbs.size < 1) var wb = await toChannel.createWebhook("Move Message");
-			else var wb = wbs.first();
-			wb.send(message.content || "", {
-				username: message.author.tag,
-				avatarURL: message.author.avatarURL(),
-				embeds: message.embeds,
-				files: message.attachments.array(),
-			}).then(() => {
-				message.delete();
-			});
-		})
-		.catch((e) => {
-			console.log(e);
-			throw "Error moving";
-		});
-}
-
-function doSomethingOnce() {}
 
 CLIENT.on("warn", (warn) => console.warn(warn));
 CLIENT.on("error", (error) => console.error(error));
